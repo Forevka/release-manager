@@ -1,0 +1,24 @@
+[package]
+name = "rm-release-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+rm-core = { workspace = true }
+rm-git-ops = { workspace = true }
+rm-jira = { workspace = true }
+rm-gitlab = { workspace = true }
+rm-storage = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+futures = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+regex = { workspace = true }
+once_cell = "1"
+git2 = { workspace = true }

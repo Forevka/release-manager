@@ -1,0 +1,70 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80"
+license = "Proprietary"
+publish = false
+
+[workspace.dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "fs", "process"] }
+tracing = "0.1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "chrono", "uuid", "migrate", "macros"] }
+keyring = { version = "3", features = ["windows-native"] }
+chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+dirs = "5"
+async-trait = "0.1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls", "http2"] }
+regex = "1"
+git2 = { version = "0.20", default-features = false, features = ["vendored-libgit2"] }
+futures = "0.3"
+url = "2"
+notify = "8"
+# Workspace-local crates
+rm-core = { path = "crates/core" }
+rm-git-ops = { path = "crates/git-ops" }
+rm-gitlab = { path = "crates/gitlab" }
+rm-jira = { path = "crates/jira" }
+rm-release-engine = { path = "crates/release-engine" }
+rm-storage = { path = "crates/storage" }
+
+[package]
+name = "release-manager"
+version = "0.1.0"
+description = "Multi-repo release manager for GitLab project groups."
+authors = ["DevCom"]
+edition = "2021"
+
+[lib]
+name = "release_manager_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+tauri-plugin-dialog = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+anyhow = { workspace = true }
+uuid = { workspace = true }
+rm-core = { workspace = true }
+rm-storage = { workspace = true }
+rm-jira = { workspace = true }
+rm-gitlab = { workspace = true }
+rm-git-ops = { workspace = true }
+rm-release-engine = { workspace = true }
+futures = { workspace = true }
+notify = { workspace = true }
