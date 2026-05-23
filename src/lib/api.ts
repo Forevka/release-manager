@@ -7,6 +7,8 @@ import { open } from "@tauri-apps/plugin-dialog";
 
 import type {
   BranchCell,
+  BranchTag,
+  BranchTagKind,
   ChangelogRange,
   ChangelogResult,
   GitLabConnection,
@@ -136,6 +138,18 @@ export const generateChangelog = (input: {
   version: string;
   tagOverrides: RepoTagOverride[];
 }) => invoke<ChangelogResult>("generate_changelog", input);
+
+// ---------- branch tags ----------
+
+export const listBranchTags = (repoId: string) =>
+  invoke<BranchTag[]>("list_branch_tags", { repoId });
+
+export const setBranchTag = (
+  repoId: string,
+  branchName: string,
+  kind: BranchTagKind | null,
+  note?: string,
+) => invoke<BranchTag | null>("set_branch_tag", { repoId, branchName, kind, note });
 
 // ---------- GitLab discovery (phase 9) ----------
 

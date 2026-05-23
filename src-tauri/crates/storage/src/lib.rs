@@ -9,6 +9,7 @@ pub mod secret;
 pub mod settings;
 pub mod groups;
 pub mod repos;
+pub mod branch_tags;
 
 pub use db::{Database, StorageError};
 pub use secret::{SecretError, SecretStore};

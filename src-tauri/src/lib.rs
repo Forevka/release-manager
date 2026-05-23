@@ -60,6 +60,8 @@ pub fn run() {
             commands::gitlab::clone_project,
             commands::changelog::list_group_tags,
             commands::changelog::generate_changelog,
+            commands::branch_tags::set_branch_tag,
+            commands::branch_tags::list_branch_tags,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

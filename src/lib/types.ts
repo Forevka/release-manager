@@ -177,6 +177,18 @@ export type ChangelogRange =
   | { kind: "tags"; fromTag: string; toTag: string }
   | { kind: "dates"; since: string; until: string | null };
 
+// ---------- branch tags ----------
+
+export type BranchTagKind = "broken" | "not-needed" | "obsolete" | "wip";
+
+export type BranchTag = {
+  repoId: string;
+  branchName: string;
+  kind: BranchTagKind;
+  note: string | null;
+  updatedAt: string;
+};
+
 // ---------- merge outcomes (phase 4) ----------
 
 export type MergeOutcome =

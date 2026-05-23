@@ -17,3 +17,4 @@ pub mod merges;
 pub mod watch;
 pub mod gitlab;
 pub mod changelog;
+pub mod branch_tags;

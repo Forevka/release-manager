@@ -13,6 +13,7 @@ import {
   Minus,
   Play,
   RotateCw,
+  Tag,
 } from "lucide-react";
 
 import {
@@ -32,6 +33,13 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   Select,
   SelectContent,
   SelectItem,
@@ -42,6 +50,7 @@ import {
   checkRelease,
   clearWatchedRepos,
   fetchRepos,
+  listBranchTags,
   listGroups,
   listJiraVersions,
   listRepositories,
@@ -49,12 +58,15 @@ import {
   openInExplorer,
   openInMergeTool,
   recheckRepoCells,
+  setBranchTag,
   watchGroupRepos,
 } from "@/lib/api";
 import { useRepoChanged } from "@/lib/repo-events";
 import { runBatchTask, runTask } from "@/lib/tasks";
 import type {
   BranchCell,
+  BranchTag,
+  BranchTagKind,
   JiraIssue,
   MergeOutcome,
   ProjectGroup,
@@ -65,6 +77,7 @@ import type {
 import { cn } from "@/lib/utils";
 
 const cellKey = (repoId: string, ticketKey: string) => `${repoId}::${ticketKey}`;
+const tagKey = (repoId: string, branchName: string) => `${repoId}::${branchName}`;
 
 export function ReleasesPage() {
   const { data: groups = [] } = useQuery({
@@ -76,6 +89,9 @@ export function ReleasesPage() {
   const [versionName, setVersionName] = useState<string | "">("");
   const [result, setResult] = useState<ReleaseCheckResult | null>(null);
   const [mergeOutcomes, setMergeOutcomes] = useState<Map<string, MergeOutcome>>(
+    new Map(),
+  );
+  const [branchTags, setBranchTagsMap] = useState<Map<string, BranchTag>>(
     new Map(),
   );
 
@@ -91,9 +107,6 @@ export function ReleasesPage() {
     [groups, groupId],
   );
 
-  // Watch this group's repos for external `.git/` changes (merge tool
-  // commits, manual git pulls, etc). When the active group changes, the
-  // backend swaps watchers; on unmount we tear them down.
   const { data: reposForGroup = [] } = useQuery({
     queryKey: ["repos", groupId],
     queryFn: () => listRepositories(groupId),
@@ -111,9 +124,6 @@ export function ReleasesPage() {
     };
   }, [groupId]);
 
-  // Reusable: re-evaluate a set of cells for one repo and splice the fresh
-  // verdicts back into the current result. Clears stale merge outcomes that
-  // have since transitioned to "merged".
   const rechcheckRepo = useCallback(
     async (repoId: string, ticketKeys: string[]) => {
       if (!groupId || ticketKeys.length === 0) return;
@@ -145,10 +155,6 @@ export function ReleasesPage() {
         setMergeOutcomes((prev) => {
           const next = new Map(prev);
           for (const f of fresh) {
-            // Clear the override whenever the repo is no longer mid-merge —
-            // the user either committed the merge (cell will be `merged`)
-            // or aborted it (cell will be `not-merged`); either way the
-            // stale "conflict" overlay no longer reflects reality.
             if (!f.mergeInProgress) {
               next.delete(cellKey(repoId, f.ticketKey));
             }
@@ -162,7 +168,6 @@ export function ReleasesPage() {
     [groupId, reposForGroup],
   );
 
-  // Auto-recheck when the backend file watcher fires for one of our repos.
   useRepoChanged(
     useCallback(
       (repoId: string) => {
@@ -174,6 +179,24 @@ export function ReleasesPage() {
       },
       [result, rechcheckRepo],
     ),
+  );
+
+  const handleTagChange = useCallback(
+    async (repoId: string, branchName: string, kind: BranchTagKind | null) => {
+      try {
+        const updated = await setBranchTag(repoId, branchName, kind);
+        setBranchTagsMap((prev) => {
+          const next = new Map(prev);
+          const key = tagKey(repoId, branchName);
+          if (updated) next.set(key, updated);
+          else next.delete(key);
+          return next;
+        });
+      } catch (e) {
+        toast.error(`Failed to set tag: ${e}`);
+      }
+    },
+    [],
   );
 
   if (groups.length === 0) {
@@ -202,12 +225,24 @@ export function ReleasesPage() {
           setVersionName("");
           setResult(null);
           setMergeOutcomes(new Map());
+          setBranchTagsMap(new Map());
         }}
         versionName={versionName}
         onVersionChange={setVersionName}
-        onResult={(r) => {
+        onResult={async (r) => {
           setResult(r);
-          setMergeOutcomes(new Map()); // fresh check wipes overrides
+          setMergeOutcomes(new Map());
+          if (r) {
+            const repoIds = [...new Set(r.cells.map((c) => c.repoId))];
+            const allTags = await Promise.all(
+              repoIds.map((id) => listBranchTags(id)),
+            );
+            const map = new Map<string, BranchTag>();
+            allTags
+              .flat()
+              .forEach((t) => map.set(tagKey(t.repoId, t.branchName), t));
+            setBranchTagsMap(map);
+          }
         }}
         currentResult={result}
       />
@@ -216,8 +251,10 @@ export function ReleasesPage() {
           result={result}
           group={group}
           mergeOutcomes={mergeOutcomes}
+          branchTags={branchTags}
           setOutcome={setOutcome}
           onRecheck={rechcheckRepo}
+          onTagChange={handleTagChange}
         />
       )}
     </PageWrapper>
@@ -255,7 +292,7 @@ function ContextCard({
   onGroupChange: (id: string) => void;
   versionName: string;
   onVersionChange: (v: string) => void;
-  onResult: (r: ReleaseCheckResult | null) => void;
+  onResult: (r: ReleaseCheckResult | null) => Promise<void>;
   currentResult: ReleaseCheckResult | null;
 }) {
   const qc = useQueryClient();
@@ -306,8 +343,8 @@ function ContextCard({
         title: `Check ${versionName} · ${group?.name ?? "—"}`,
         command: (taskId) => checkRelease(groupId, versionName, taskId),
       }),
-    onSuccess: (r) => {
-      onResult(r);
+    onSuccess: async (r) => {
+      await onResult(r);
       toast.success(`Checked ${r.tickets.length} tickets`);
     },
     onError: (e) => toast.error(`Check failed: ${e}`),
@@ -519,14 +556,22 @@ function ResultView({
   result,
   group,
   mergeOutcomes,
+  branchTags,
   setOutcome,
   onRecheck,
+  onTagChange,
 }: {
   result: ReleaseCheckResult;
   group: ProjectGroup;
   mergeOutcomes: Map<string, MergeOutcome>;
+  branchTags: Map<string, BranchTag>;
   setOutcome: (key: string, outcome: MergeOutcome) => void;
   onRecheck: (repoId: string, ticketKeys: string[]) => void;
+  onTagChange: (
+    repoId: string,
+    branchName: string,
+    kind: BranchTagKind | null,
+  ) => Promise<void>;
 }) {
   const { data: repos = [] } = useQuery({
     queryKey: ["repos", group.id],
@@ -548,8 +593,8 @@ function ResultView({
   );
 
   const totals = useMemo(
-    () => summarize(result.cells, mergeOutcomes),
-    [result.cells, mergeOutcomes],
+    () => summarize(result.cells, mergeOutcomes, branchTags),
+    [result.cells, mergeOutcomes, branchTags],
   );
 
   if (result.tickets.length === 0) {
@@ -604,8 +649,10 @@ function ResultView({
                 cells={cells}
                 ticketsByKey={ticketsByKey}
                 mergeOutcomes={mergeOutcomes}
+                branchTags={branchTags}
                 setOutcome={setOutcome}
                 onRecheck={onRecheck}
+                onTagChange={onTagChange}
               />
             );
           })}
@@ -620,20 +667,38 @@ function RepoAccordionItem({
   cells,
   ticketsByKey,
   mergeOutcomes,
+  branchTags,
   setOutcome,
   onRecheck,
+  onTagChange,
 }: {
   repo: Repository;
   cells: BranchCell[];
   ticketsByKey: Map<string, JiraIssue>;
   mergeOutcomes: Map<string, MergeOutcome>;
+  branchTags: Map<string, BranchTag>;
   setOutcome: (key: string, outcome: MergeOutcome) => void;
   onRecheck: (repoId: string, ticketKeys: string[]) => void;
+  onTagChange: (
+    repoId: string,
+    branchName: string,
+    kind: BranchTagKind | null,
+  ) => Promise<void>;
 }) {
-  const repoTotals = summarize(cells, mergeOutcomes);
+  const repoTotals = summarize(cells, mergeOutcomes, branchTags);
   const mergeableCells = useMemo(
-    () => cells.filter((c) => isMergeableNow(c, mergeOutcomes.get(cellKey(c.repoId, c.ticketKey)))),
-    [cells, mergeOutcomes],
+    () =>
+      cells.filter((c) => {
+        const tag = c.resolvedBranch
+          ? branchTags.get(tagKey(c.repoId, c.resolvedBranch))
+          : undefined;
+        return isMergeableNow(
+          c,
+          mergeOutcomes.get(cellKey(c.repoId, c.ticketKey)),
+          tag,
+        );
+      }),
+    [cells, mergeOutcomes, branchTags],
   );
   const [bulkRunning, setBulkRunning] = useState(false);
 
@@ -731,8 +796,10 @@ function RepoAccordionItem({
             cells={cells}
             ticketsByKey={ticketsByKey}
             mergeOutcomes={mergeOutcomes}
+            branchTags={branchTags}
             setOutcome={setOutcome}
             onRecheck={onRecheck}
+            onTagChange={onTagChange}
           />
         </div>
       </AccordionContent>
@@ -745,15 +812,23 @@ function RepoTicketList({
   cells,
   ticketsByKey,
   mergeOutcomes,
+  branchTags,
   setOutcome,
   onRecheck,
+  onTagChange,
 }: {
   repo: Repository;
   cells: BranchCell[];
   ticketsByKey: Map<string, JiraIssue>;
   mergeOutcomes: Map<string, MergeOutcome>;
+  branchTags: Map<string, BranchTag>;
   setOutcome: (key: string, outcome: MergeOutcome) => void;
   onRecheck: (repoId: string, ticketKeys: string[]) => void;
+  onTagChange: (
+    repoId: string,
+    branchName: string,
+    kind: BranchTagKind | null,
+  ) => Promise<void>;
 }) {
   if (cells.length === 0) {
     return (
@@ -771,8 +846,18 @@ function RepoTicketList({
           cell={c}
           ticket={ticketsByKey.get(c.ticketKey)}
           outcome={mergeOutcomes.get(cellKey(c.repoId, c.ticketKey))}
+          tag={
+            c.resolvedBranch
+              ? branchTags.get(tagKey(c.repoId, c.resolvedBranch))
+              : undefined
+          }
           setOutcome={(o) => setOutcome(cellKey(c.repoId, c.ticketKey), o)}
           onRecheck={() => onRecheck(c.repoId, [c.ticketKey])}
+          onTagChange={(kind) => {
+            if (c.resolvedBranch) {
+              void onTagChange(c.repoId, c.resolvedBranch, kind);
+            }
+          }}
         />
       ))}
     </ul>
@@ -786,15 +871,19 @@ function TicketRow({
   cell,
   ticket,
   outcome,
+  tag,
   setOutcome,
   onRecheck,
+  onTagChange,
 }: {
   repo: Repository;
   cell: BranchCell;
   ticket: JiraIssue | undefined;
   outcome: MergeOutcome | undefined;
+  tag: BranchTag | undefined;
   setOutcome: (o: MergeOutcome) => void;
   onRecheck: () => void;
+  onTagChange: (kind: BranchTagKind | null) => void;
 }) {
   const merge = useMutation({
     mutationFn: () =>
@@ -815,7 +904,7 @@ function TicketRow({
     onError: (e) => toast.error(`Merge failed: ${e}`),
   });
 
-  const canMerge = isMergeableNow(cell, outcome);
+  const canMerge = isMergeableNow(cell, outcome, tag);
 
   return (
     <li className="grid grid-cols-[8rem_1fr_auto] items-center gap-3 px-3 py-2">
@@ -836,6 +925,11 @@ function TicketRow({
             "no branch resolved"
           )}
         </div>
+        {tag && (
+          <div className="mt-0.5">
+            <BranchTagBadge kind={tag.kind} />
+          </div>
+        )}
         {outcome && outcome.kind !== "success" && (
           <p className="mt-1 text-xs text-destructive">
             {truncate(outcome.message, 220)}
@@ -844,6 +938,9 @@ function TicketRow({
       </div>
       <div className="flex items-center gap-2">
         <DisplayVerdict cell={cell} outcome={outcome} />
+        {cell.resolvedBranch && (
+          <BranchTagPicker tag={tag} onTagChange={onTagChange} />
+        )}
         {canMerge && (
           <Button
             size="sm"
@@ -864,7 +961,9 @@ function TicketRow({
             <Button
               size="sm"
               variant="outline"
-              onClick={() => openInMergeTool(repo.id).catch((e) => toast.error(String(e)))}
+              onClick={() =>
+                openInMergeTool(repo.id).catch((e) => toast.error(String(e)))
+              }
             >
               <ExternalLink className="size-3" />
               Open in merge tool
@@ -872,7 +971,9 @@ function TicketRow({
             <Button
               size="sm"
               variant="ghost"
-              onClick={() => openInExplorer(repo.id).catch((e) => toast.error(String(e)))}
+              onClick={() =>
+                openInExplorer(repo.id).catch((e) => toast.error(String(e)))
+              }
               title="Open repo folder in Explorer"
             >
               <FolderOpen className="size-3" />
@@ -898,12 +999,14 @@ function TicketRow({
 function isMergeableNow(
   cell: BranchCell,
   outcome: MergeOutcome | undefined,
+  tag: BranchTag | undefined,
 ): boolean {
-  // Already merged in the check, or fixed since via our Merge button.
   if (cell.verdict !== "not-merged") return false;
   if (outcome?.kind === "success") return false;
-  // Need a concrete branch to merge.
-  return Boolean(cell.resolvedBranch);
+  if (!cell.resolvedBranch) return false;
+  // Tagged branches are excluded from merge
+  if (tag) return false;
+  return true;
 }
 
 // ---------- summary helpers ----------
@@ -913,13 +1016,21 @@ type Totals = {
   notMerged: number;
   notFound: number;
   problems: number;
+  skipped: number;
 };
 
 function summarize(
   cells: BranchCell[],
   outcomes: Map<string, MergeOutcome>,
+  branchTags: Map<string, BranchTag>,
 ): Totals {
-  const t: Totals = { merged: 0, notMerged: 0, notFound: 0, problems: 0 };
+  const t: Totals = {
+    merged: 0,
+    notMerged: 0,
+    notFound: 0,
+    problems: 0,
+    skipped: 0,
+  };
   for (const c of cells) {
     const o = outcomes.get(cellKey(c.repoId, c.ticketKey));
     if (o?.kind === "success") {
@@ -927,8 +1038,14 @@ function summarize(
       continue;
     }
     if (o) {
-      // conflict / dirty / failed bumps the problems counter.
       t.problems++;
+      continue;
+    }
+    const tag = c.resolvedBranch
+      ? branchTags.get(tagKey(c.repoId, c.resolvedBranch))
+      : undefined;
+    if (tag && c.verdict === "not-merged") {
+      t.skipped++;
       continue;
     }
     switch (c.verdict) {
@@ -968,6 +1085,14 @@ function SummaryBadges({ totals }: { totals: Totals }) {
       <Badge variant="outline" className="text-muted-foreground">
         {totals.notFound} not found
       </Badge>
+      {totals.skipped > 0 && (
+        <Badge
+          variant="outline"
+          className="border-slate-300 text-slate-600 dark:border-slate-600 dark:text-slate-300"
+        >
+          {totals.skipped} skipped
+        </Badge>
+      )}
       {totals.problems > 0 && (
         <Badge variant="destructive">{totals.problems} problems</Badge>
       )}
@@ -991,6 +1116,11 @@ function SummaryChips({ totals }: { totals: Totals }) {
       {totals.notFound > 0 && (
         <span className="rounded bg-muted px-1.5 py-0.5">
           {totals.notFound} not found
+        </span>
+      )}
+      {totals.skipped > 0 && (
+        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          {totals.skipped} skipped
         </span>
       )}
       {totals.problems > 0 && (
@@ -1107,6 +1237,92 @@ function VerdictBadge({ cell }: { cell: BranchCell }) {
         </Badge>
       );
   }
+}
+
+// ---------- branch tag sub-components ----------
+
+const TAG_META: Record<BranchTagKind, { label: string; className: string }> = {
+  broken: {
+    label: "broken",
+    className:
+      "border-red-300 text-red-700 dark:border-red-700 dark:text-red-300",
+  },
+  "not-needed": {
+    label: "not needed",
+    className:
+      "border-slate-300 text-slate-600 dark:border-slate-600 dark:text-slate-300",
+  },
+  obsolete: {
+    label: "obsolete",
+    className:
+      "border-purple-300 text-purple-700 dark:border-purple-700 dark:text-purple-300",
+  },
+  wip: {
+    label: "WIP",
+    className:
+      "border-blue-300 text-blue-700 dark:border-blue-700 dark:text-blue-300",
+  },
+};
+
+function BranchTagBadge({ kind }: { kind: BranchTagKind }) {
+  const meta = TAG_META[kind];
+  return (
+    <Badge variant="outline" className={cn("text-xs", meta.className)}>
+      {meta.label}
+    </Badge>
+  );
+}
+
+function BranchTagPicker({
+  tag,
+  onTagChange,
+}: {
+  tag: BranchTag | undefined;
+  onTagChange: (kind: BranchTagKind | null) => void;
+}) {
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          size="sm"
+          variant={tag ? "secondary" : "ghost"}
+          className="h-7 px-2"
+          title={
+            tag
+              ? `Tagged: ${TAG_META[tag.kind].label} — click to change`
+              : "Tag this branch"
+          }
+        >
+          <Tag className="size-3" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        {(["broken", "not-needed", "obsolete", "wip"] as BranchTagKind[]).map(
+          (k) => (
+            <DropdownMenuItem
+              key={k}
+              onClick={() => onTagChange(k)}
+              className={cn(tag?.kind === k && "font-medium")}
+            >
+              {tag?.kind === k && <Check className="mr-2 size-3" />}
+              {TAG_META[k].label}
+            </DropdownMenuItem>
+          ),
+        )}
+        {tag && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuItem
+              onClick={() => onTagChange(null)}
+              className="text-muted-foreground"
+            >
+              Clear tag
+            </DropdownMenuItem>
+          </>
+        )}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
 }
 
 function truncate(s: string, n: number): string {
