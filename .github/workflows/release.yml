@@ -32,11 +32,25 @@ jobs:
 
       - run: pnpm install
 
-      - uses: tauri-apps/tauri-action@v0
+      - run: pnpm tauri build --bundles none
+
+      - name: Upload portable binary to release
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $asset = "ReleaseManager-${tag}-portable.exe"
+          Copy-Item "src-tauri\target\release\release-manager.exe" $asset
+          gh release create $tag $asset `
+            --title "Release Manager $tag" `
+            --draft `
+            --notes ""
+
+      - name: Upload portable binary as workflow artifact
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: Release Manager ${{ github.ref_name }}
-          releaseDraft: true
-          prerelease: false
+          name: ReleaseManager-portable
+          path: src-tauri/target/release/release-manager.exe
