@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
+use futures::stream::StreamExt;
 use rm_core::{BranchCell, JiraVersion, ReleaseCheckResult};
 use rm_jira::{JiraClient, JiraConfig};
 use rm_storage::secret::keys;
@@ -144,6 +145,12 @@ pub async fn fetch_repos(
         emit_progress(&app, tid, 0, total);
     }
 
+    // Cap how many `git fetch` processes hit the remote at once. Firing all
+    // repos in a large group concurrently floods the host's SSH daemon and
+    // gets connections dropped ("kex_exchange_identification: Connection
+    // closed by remote host"), so we keep at most 5 fetches in flight.
+    const FETCH_CONCURRENCY: usize = 5;
+
     let handles = repos.into_iter().map(|r| {
         let path = PathBuf::from(&r.path);
         let id = r.id;
@@ -178,5 +185,9 @@ pub async fn fetch_repos(
             }
         }
     });
-    Ok(futures::future::join_all(handles).await)
+    let results = futures::stream::iter(handles)
+        .buffer_unordered(FETCH_CONCURRENCY)
+        .collect::<Vec<_>>()
+        .await;
+    Ok(results)
 }

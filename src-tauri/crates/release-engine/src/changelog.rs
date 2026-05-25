@@ -7,7 +7,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::time::Duration;
 
 use once_cell::sync::Lazy;
 use regex::{Regex, RegexSet};
